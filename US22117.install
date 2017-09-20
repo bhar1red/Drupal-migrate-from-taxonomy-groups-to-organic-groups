@@ -1,0 +1,75 @@
+<?php
+
+/**
+ * Implements hook_install().
+ */
+function US22117_enable(){
+  $group_type = 'community';
+  $description = 'Content type for community group';
+  create_community($group_type, $description);
+  add_fields_to_group_content_type($group_type);
+  set_as_group_content('node', 'forum');
+  set_group_target_bundle($group_type);
+
+//  US22117_communities($group_type);
+
+}
+
+function set_group_target_bundle($target_bundle){
+  $field = field_info_field('og_group_ref');
+  $field['settings']['handler_settings']['target_bundles'] = array($target_bundle => $target_bundle);
+  field_update_field($field);
+}
+
+/**
+ * [add_fields_to_group_content_type]
+ * Create field_icon and field_forum_default_tags instances to 'group' content type.
+ */
+function add_fields_to_group_content_type($group_type){
+  create_field_instance('node','body',$group_type,'Body','Body');
+  create_field_instance('node','field_icon',$group_type,'Icon','Field Icon');
+  create_field_instance('node','field_forum_default_tags',$group_type,'Tags','Tags - References to tags vocabulary');
+  create_field_instance('node','field_weight',$group_type,'weight','Weight field, used to sort elements');
+  return;
+}
+
+/**
+ * [set_forum_as_group_content]
+ * Set Bundle as 'group' content type. Add Group Audience Field to Bundle
+ * @param $entity_type
+ * The Entity Type e.g. 'node'
+ * @param $bundle
+ * The Content Type or Bundle. e.g. 'forum', 'group'
+ */
+function set_as_group_content($entity_type, $bundle){
+  og_create_field(OG_AUDIENCE_FIELD, $entity_type, $bundle);
+  return;
+}
+
+/**
+ * [create_field_instance]
+ * Set Bundle as 'group' content type. Add Group Audience Field to Bundle
+ * @param $entity_type
+ * The Entity Type e.g. 'node'
+ * @param $field_name
+ * The Field Name e.g. field_icon, field_forum_default_tags
+ * @param $bundle
+ * The Content Type or Bundle. e.g. 'forum', 'group'
+ * @param $label
+ * The Label for the field e.g. Icon, Tags
+ * @param $description
+ * The description of the field
+ */
+function create_field_instance($entity_type, $field_name, $bundle, $label, $description ){
+  $instance = field_info_instance($entity_type, $field_name, $bundle);
+  if(empty($instance)){
+    $instance = array( 'field_name' => $field_name,
+      'entity_type' => $entity_type,
+      'bundle' => $bundle,
+      'label' => $label,
+      'description' => $description,
+    );
+     field_create_instance($instance);
+  }
+  return;
+}

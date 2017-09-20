@@ -1,0 +1,4 @@
+name = Acquisition Gateway taxonomy to Organic Group.
+description = Create Organic Groups based on taxonomy vocabulary. Move all forum taxonomy to groups
+core = 7.x
+package = Acquisition Gateway

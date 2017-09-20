@@ -1,0 +1,243 @@
+<?php
+
+function US22117_menu(){
+  $items = array();
+  // Configuration Page
+  $items['admin/forumgroupsmigrate/taxonomy'] = array(
+    'title' => 'taxonomy to Groups Migration',
+	  'description' => 'Module to migrate forums taxonomy to groups. <br/> Create new groups based on taxnomy. <br/> Update community topics to new groups. <br/> Assign users following a certain taxonomy to respective groups',	// Menu item description
+    'access arguments' => array('access content'),
+    'page callback' => 'US22117_communities',
+  );
+  $items['admin/forumgroupsmigrate/taxonomy/viewusertaxonomygroups'] = array(
+    'title' => 'View User taxonomyGroups',
+   'description' => 'View forum taxonomy groups that user belong to',	// Menu item description
+    'access arguments' => array('access content'),
+    'page callback' => 'view_user_groups',
+  );
+  return $items;
+}
+
+function create_community($group_type, $description ){
+    create_content_type($group_type, $group_type,'node_content',$group_type);
+}
+
+function create_content_type($group_type, $name, $base, $description){
+  $type = node_type_load($group_type);
+  if (!$type) {
+    $type = array(
+      'type' => $group_type,
+      'name' => $name,
+      'base' => $base,
+      'description' => t(
+        $description),
+      'custom' => 1,
+      'modified' => 1,
+      'locked' => 0,
+    );
+    }
+    $type = node_type_set_defaults($type);
+    node_type_save($type);
+    og_create_field(OG_GROUP_FIELD, 'node', $group_type);
+}
+
+/**
+* View taxonomy groups that belong to user
+*/
+function view_user_groups(){
+    $users = db_query("SELECT DISTINCT `uid` FROM `user_preferences` where type='group' and action='follow'");
+    echo "<style>td{border-left:1px solid black;border-top:1px solid black;}table{border-right:1px solid black;border-bottom:1px solid black;}</style>";
+    echo '<table>';
+    foreach ($users as $user) {
+      echo "<tr>";
+      $userd=user_load($user->uid);
+      $username=$userd->name;
+      echo "<td>".$user->uid."</td>" . "<td>".$username."</td>";
+      $user_prefs = db_query("SELECT `uid`, `item_id` FROM `user_preferences` where type='group' and action='follow' and uid='".$user->uid."'");
+      echo "<td>";
+      foreach ($user_prefs as $user_pref) {
+        echo taxonomy_get_term_name_by_id($user_pref->item_id).", ";
+      }
+      echo "</td>";
+      echo "</tr>";
+    }
+    echo "</table>";
+}
+
+function taxonomy_get_term_name_by_id($tid) {
+  $term_name = db_query('SELECT name FROM {taxonomy_term_data} WHERE tid = :tid', array(':tid' => $tid))->fetchField();
+  return $term_name;
+}
+
+function US22117_communities($group_type){
+  $transaction = db_transaction();
+  $vocab = 'forums';
+  try {
+    print_r('Creating Groups based on taxonomy ');
+    $term_node_map =  US22117_create_groups($vocab, $group_type);
+    print_r('Assigning community topics to their respected groups');
+    US22117_update_communitytopics($term_node_map);
+    print_r('Community topics updated successfully ');
+    US22117_add_users_to_group($term_node_map);
+    print_r('People added to groups successfully ');
+    print_r('Migration successfully completed ');
+    return;
+  }
+  catch (Exception $e) {
+    $transaction->rollback();
+    echo "Rolling back Transactions.";
+    watchdog_exception('my_type', $e);
+    exit();
+  }
+}
+/**
+ * [migration_forumgroups_create_groups description]
+ * @param  String $vocab 'forums'
+ * @return Array  $term_node_map
+ * Function that parses through each taxonomy term from 'forums' vocabulary. Create a Group for each one.
+ */
+
+function US22117_create_groups($vocab, $group_type){
+  $vocabulary = taxonomy_vocabulary_machine_name_load('forums');
+  $vid = $vocabulary->vid;
+    echo 'VID ID :' . $vid;
+  $term_node_map = array();
+  $nodeid = '';
+
+  $terms = db_query("SELECT * FROM {taxonomy_term_data} WHERE vid ='".$vid."'");
+
+  foreach($terms as $term){
+    //Echo Term id
+    echo 'Term ID :' . $term->tid;
+      $group = db_query("SELECT * FROM `node` WHERE type='community' and title='".$term->name."'")->fetchAll();
+      if(count($group) == 0){
+      $tax_term['id'] = $term->tid;
+      $tax_term['name'] = $term->name;
+      $tax_term['description'] = $term->description;
+      $tax_term['icon'] = db_query("select `field_icon_value` from `field_data_field_icon` where entity_id = '".$term->tid."'")->fetchObject();
+      $tax_term['tags'] = db_query("select `field_forum_default_tags_tid` from `field_data_field_forum_default_tags` where entity_id = '".$term->tid."'")->fetchCol();
+      $tax_term['weight'] = $term->weight;
+      //$tax_term = taxonomy_term_load_multiple(array($term->tid));  //Had to use this function and send as taxonomy term, while creating groups. (For field data to appear)
+      echo 'name: '. $tax_term['name'];
+      $nodeid = US22117_create_group($tax_term, $group_type);
+      $term_node_map[$term->tid] = $nodeid;
+    }
+  }
+  return $term_node_map;
+}
+
+/**
+ * [migration_forumgroups_create_group description]
+ * @param  Array $term 'taxonomy term from forum vocabulary'
+ * @return String  $nid  'Node ID'
+ * Function that creates a group based on values from taxonomy term
+ */
+
+function US22117_create_group($term, $group_type){
+  global $user;
+
+  if($user->uid){
+    $node->uid = $user->uid;
+  }
+  $node = new stdClass();
+  $node->title = $term['name'];
+  $node->type = $group_type;
+  node_object_prepare($node); // Sets some defaults. Invokes hook_prepare() and hook_node_prepare().
+  $node->language = LANGUAGE_NONE; // Or e.g. 'en' if locale is enabled
+  $node->status = 1; //(1 or 0): published or not
+  $node->promote = 0; //(1 or 0): promoted to front page
+  $node->field_public_private['und'][0]['value'] = 1;
+  $node->body['und'][0]['format'] = 'full_html';
+  $node->body['und'][0]['value'] = $term['description'];
+  $node->body['und'][0]['summary'] = $term['description'];
+  echo $term['icon']->field_icon_value;
+  $node->field_icon['und']['0']['value'] = $term['icon']->field_icon_value;
+  foreach ($term['tags'] as $tag) {
+     $node->field_forum_default_tags['und'][]['tid'] = $tag;
+  }
+  $node->field_weight['und'][0]['value'] = (int) $term['weight'];
+  $node = node_submit($node); // Prepare node for saving
+  node_save($node);
+  echo 'nodeid: '.$node->nid.': ';
+  echo 'Group '.$term['id'].' '.$term['name'].' created!'."\n";
+  $nid = $node->nid;
+  unset($node);
+  return $nid;
+}
+
+/**
+ * [migration_forumgroups_update_communitytopics description]
+ * @param  Array $term_node_map 'Mapping Array between forum taxonomy terms and newly created group node ids'
+ * Function that updates community topics to their respective groups
+ */
+
+function US22117_update_communitytopics($term_node_map){
+  $nodes = node_load_multiple(array(), array('type' => 'forum'));
+  foreach ($nodes as $node){
+    if(!empty($term_node_map[$node->taxonomy_forums['und'][0]['tid']])){
+      print_r('node: '. $node->nid."\t". 'term node: ' . $term_node_map[$node->taxonomy_forums['und'][0]['tid']] . "\n");
+      $node->og_group_ref['und'][0]['target_id'] = $term_node_map[$node->taxonomy_forums['und'][0]['tid']];
+      node_save($node);
+    }
+  }
+  return;
+}
+
+/**
+ * [migration_forumgroups_add_users_to_group description]
+ * @param  Array $term_node_map 'Mapping Array between forum taxonomy terms and newly created group node ids'
+ * Function that parses through all users and taxonomy groups they follow. Pass uid and respective group id (based on term_node_map) to add user to group
+ */
+function US22117_add_users_to_group($term_node_map){
+  $users = db_query("SELECT DISTINCT `uid` FROM `user_preferences` where type='group' and action='follow'");
+  foreach ($users as $user) {
+    $user_prefs = db_query("SELECT `uid`, `item_id` FROM `user_preferences` where type='group' and action='follow' and uid='".$user->uid."'");
+    foreach($user_prefs as $user_pref){
+      $groupid = (string) $term_node_map[$user_pref->item_id];
+      if (!empty($groupid) && !empty($user->uid)){
+        echo 'user: '. $user->uid . "\t" . 'Groupid: '. $groupid ."\n";
+        US22117_add_user_to_group($user->uid, $groupid);
+      }
+    }
+  }
+  return;
+}
+
+/**
+     * Adding a user to an Organic group.
+     *
+     * @param int $uid.
+     *   Integer specifying the user ID.
+     * @param int $gid.
+     *   The Organic group ID.
+     * @param string $group_type.
+     *   The entity type of the group.
+     *   If group type is not given, then the default group type will be 'node'.
+     * @param string $membership_type.
+     *   Type of membership in which the user entity to be added to the group.
+     *   If the membership_type is not given, then the default membership_type
+     *   will be 'og_membership_type_default'.
+     *
+     */
+    function US22117_add_user_to_group($uid, $gid, $group_type = NULL, $membership_type = NULL) {
+      $group = node_load($gid);
+      $user = user_load($uid);
+      if (!$group_type) {
+        $group_type = 'node';
+      }
+      if (!$membership_type) {
+        $membership_type = OG_MEMBERSHIP_TYPE_DEFAULT;
+      }
+      $is_a_group = $group->group_group[$group->language][0]['value'];
+      // Checking whether $group is an organic grou1p and the $user object exists.
+      if ($is_a_group && $user) {
+        $values = array(
+          'entity_type' => 'user',
+          'entity' => $user,
+          'state' => OG_STATE_ACTIVE,
+          'membership_type' => $membership_type
+        );
+        og_group($group_type, $gid, $values);
+      }
+      return;
+    }
